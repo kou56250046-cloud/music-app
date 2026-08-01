@@ -3,12 +3,13 @@
    機内モードでも起動できるようにする。
    音楽ファイルはここではなくIndexedDBに入っているので対象外。 */
 
-const VERSION = "prism-v2";
+const VERSION = "prism-v3";
 const SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./fonts/space-grotesk-latin.woff2",
+  "./vendor/peerjs.min.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png"
 ];

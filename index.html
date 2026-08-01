@@ -408,7 +408,8 @@ body.playing .art::after{animation-play-state:running;}
   opacity:0; pointer-events:none; transition:opacity .28s;}
 #scrim.show{opacity:1; pointer-events:auto;}
 #sheet{
-  position:fixed; left:8px; right:8px; bottom:0; z-index:51;
+  /* 転送のときはPCの広い画面でも開くので、横に伸びすぎないようにする */
+  position:fixed; left:8px; right:8px; max-width:560px; margin:0 auto; bottom:0; z-index:51;
   background:#1A1130; border:1px solid var(--hairline);
   border-radius:24px 24px 0 0; padding:10px 10px calc(var(--safe-b) + 14px);
   transform:translateY(110%); transition:transform .34s cubic-bezier(.3,1.05,.4,1);
@@ -432,6 +433,18 @@ body.playing .art::after{animation-play-state:running;}
   color:var(--text); font-size:16px; outline:none;
 }
 .field:focus{border-color:rgba(166,107,255,.6);}
+
+/* ---------- 端末間の受け渡し ---------- */
+.code{
+  font-family:var(--display); font-size:40px; font-weight:700; letter-spacing:.18em;
+  text-align:center; padding:16px 0 10px; color:var(--text);
+  text-shadow:0 4px 24px rgba(166,107,255,.5);
+}
+.xfer-note{color:var(--muted); font-size:12.5px; line-height:1.75; margin:0;}
+.xfer-name{
+  color:var(--muted); font-size:12px; margin:8px 0 0;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
 
 /* ---------- toast ---------- */
 #toast{
@@ -560,6 +573,7 @@ body.playing .art::after{animation-play-state:running;}
 <div id="busy"><div><div class="ring"></div><div class="txt" id="busyTxt">読み込み中</div><div class="sub" id="busySub"></div><button id="busyCancel" class="hidden">中止する</button></div></div>
 
 <input type="file" id="filePicker" accept="audio/mpeg,audio/mp3,.mp3" multiple class="hidden">
+<input type="file" id="sendPicker" accept="audio/mpeg,audio/mp3,.mp3" multiple class="hidden">
 <audio id="audio" preload="metadata"></audio>
 
 <script>
@@ -824,6 +838,7 @@ async function importFiles(fileList){
   await Promise.all(Array.from({length: Math.min(IMPORT_CONC, files.length)}, worker));
   busy(false);
   render();
+  rememberLibrarySize();
 
   if(failed){
     S.importError = {
@@ -841,6 +856,29 @@ async function importFiles(fileList){
   toast(stopped
     ? added + "曲を追加して中止しました"
     : added + "曲を追加" + (skipped ? "・" + skipped + "曲は重複でスキップ" : ""));
+}
+
+/* iPhoneに保存領域を回収されたことに気づけるようにする。
+   IndexedDBとは別の場所に曲数を控えておき、起動時に突き合わせる。
+   （両方まとめて消された場合は原理的に検知できない） */
+function rememberLibrarySize(){
+  try{
+    localStorage.setItem("prism.lib", JSON.stringify({
+      n: S.tracks.length,
+      b: S.tracks.reduce((s, t) => s + (t.fileSize || 0), 0),
+      at: Date.now()
+    }));
+  }catch(e){}
+}
+
+function showDataLoss(prev){
+  openSheet(`
+    <h3>曲がなくなっています</h3>
+    <p class="sub">前回は${prev.n}曲（${fmtBytes(prev.b || 0)}）入っていましたが、いま0曲になっています。iPhoneが、しばらく開かれなかったアプリの保存領域を回収したものと考えられます。</p>
+    <p class="sub">お手数ですが、mp3をもう一度取り込んでください。「プレイリスト構成を書き出す」でファイルを保存してあれば、取り込んだあとに読み込むと元の並びに戻せます。</p>
+    <p class="sub">今後は、ホーム画面のアイコンから週に一度は開くようにすると起きにくくなります。</p>
+    <button class="sheet-item" id="lossOk">わかりました</button>`);
+  $("lossOk").addEventListener("click", () => { closeSheet(); rememberLibrarySize(); });
 }
 
 function showImportError(){
@@ -1242,10 +1280,10 @@ function renderResults(animate){
       <div class="empty">
         <div class="glyph">${SVG_NOTE}</div>
         <h2>まだ1曲も入っていません</h2>
-        <p>右上の＋から、iPhoneの「ファイル」アプリに置いたmp3を選んで追加します。</p>
+        <p>右上の＋から、iPhoneの「ファイル」アプリに置いたmp3を選んで追加します。PCから直接受け取ることもできます。</p>
         <button class="cta" id="btnAdd2">＋ 曲を追加する</button>
       </div>`;
-    $("btnAdd2").addEventListener("click", () => $("filePicker").click());
+    $("btnAdd2").addEventListener("click", openAddMenu);
   }else if(!list.length){
     box.innerHTML = `<div class="empty"><h2>見つかりません</h2><p>「${esc(S.query)}」に一致する曲はありません。別の言葉で探してみてください。</p></div>`;
   }else{
@@ -1285,7 +1323,7 @@ function bindLibrary(){
       renderResults();
     }));
 
-  $("btnAdd") && $("btnAdd").addEventListener("click", () => $("filePicker").click());
+  $("btnAdd") && $("btnAdd").addEventListener("click", openAddMenu);
 }
 
 /* 行のタップ（委譲） */
@@ -1545,6 +1583,7 @@ async function deleteTrack(id){
   }
   S.queue = S.queue.filter(x => x !== id);
   render();
+  rememberLibrarySize();
 
   if(!backup){ toast("削除しました"); return; }
   toast("「" + backup.title + "」を削除しました", {
@@ -1562,6 +1601,7 @@ async function deleteTrack(id){
           }
         }
         render();
+        rememberLibrarySize();
         toast("元に戻しました");
       }catch(e){
         toast("戻せませんでした（保存容量が不足している可能性）");
@@ -1620,6 +1660,12 @@ async function renderSettings(){
       <p style="margin-top:8px">「自動削除よけ」が不可の場合（iPhoneはこちら）、長く使わないとデータが消えることがあります。ホーム画面のアイコンから定期的に開くのが唯一の対策です。</p>
     </div>
 
+    <div class="card">
+      <h3>別の端末へ曲を送る</h3>
+      <p>PCのブラウザでこのページを開き、下のボタンからmp3を選ぶと、iPhoneへ直接送れます。曲はこの2台の間だけを通り、どこにも保存されません。</p>
+      <button class="linkbtn" id="btnSend" style="margin:12px 0 0">送るmp3を選ぶ</button>
+    </div>
+
     <button class="linkbtn" id="btnExport">プレイリスト構成を書き出す</button>
     <button class="linkbtn" id="btnImportPl">プレイリスト構成を読み込む</button>
     <button class="linkbtn danger" id="btnReset">すべてのデータを削除</button>
@@ -1629,6 +1675,7 @@ async function renderSettings(){
       <p>個人利用のための音楽プレイヤーです。曲はこの端末の中だけに保存され、外部に送信されることはありません。</p>
     </div>`;
 
+  $("btnSend").addEventListener("click", () => $("sendPicker").click());
   $("btnExport").addEventListener("click", exportPlaylists);
   $("btnImportPl").addEventListener("click", () => $("plImport").click());
   $("btnReset").addEventListener("click", confirmReset);
@@ -1672,7 +1719,7 @@ function confirmReset(){
     prefetched = { id: null, blob: null };
     artCache.clear();
     $("mini").classList.remove("show");
-    closeSheet(); render(); toast("削除しました");
+    closeSheet(); render(); rememberLibrarySize(); toast("削除しました");
   });
 }
 
@@ -1688,7 +1735,10 @@ function closeSheet(){
   $("sheet").classList.remove("show");
   $("scrim").classList.remove("show");
 }
-$("scrim").addEventListener("click", () => { closeSheet(); closeNP(); });
+$("scrim").addEventListener("click", () => {
+  if(XFER.busy) return;   // 転送中にうっかり閉じない
+  closeSheet(); closeNP();
+});
 
 function openNP(){ if(S.currentId) $("np").classList.add("show"); }
 function closeNP(){ $("np").classList.remove("show"); }
@@ -1800,6 +1850,317 @@ plImport.addEventListener("change", async e => {
 });
 
 /* ============================================================
+   12. 別の端末との受け渡し
+   PCで選んだmp3をiPhoneへ直接送る。曲データは2台の間だけを通り、
+   どこにも保存されない。「相手を見つける」ところだけ外部の
+   無料サービス（PeerJS）を借りている。
+   ============================================================ */
+const XFER_CHUNK = 64 * 1024;      // 一度に送る大きさ
+const XFER_HIGH  = 1024 * 1024;    // 送信待ちがこれを超えたら流れるまで待つ
+const XFER = { peer:null, conn:null, cancel:false, busy:false, lib:null };
+
+function loadPeerLib(){
+  if(window.Peer) return Promise.resolve();
+  if(XFER.lib) return XFER.lib;
+  XFER.lib = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "vendor/peerjs.min.js";
+    s.onload = () => res();
+    s.onerror = () => { XFER.lib = null; rej(new Error("転送用の部品を読み込めませんでした")); };
+    document.head.appendChild(s);
+  });
+  return XFER.lib;
+}
+
+function endTransfer(){
+  XFER.cancel = true;
+  XFER.busy = false;
+  try{ if(XFER.conn) XFER.conn.close(); }catch(e){}
+  try{ if(XFER.peer) XFER.peer.destroy(); }catch(e){}
+  XFER.conn = null;
+  XFER.peer = null;
+}
+
+function xferBody(html){
+  const el = $("xferBody");
+  if(el) el.innerHTML = html;
+}
+/* 終わったあとに「やめる」と出ていると、押していいのか迷う */
+function xferDone(){
+  const b = $("xferStop");
+  if(b){ b.textContent = "閉じる"; b.classList.remove("danger"); }
+}
+function xferError(msg){
+  XFER.busy = false;
+  xferBody(`<p class="xfer-note">${esc(msg)}</p>`);
+}
+function peerErrorText(err){
+  const t = err && err.type;
+  if(t === "unavailable-id")  return "コードが重なりました。一度やめて、やり直してください。";
+  if(t === "peer-unavailable") return "その番号の相手が見つかりません。PC側の画面に出ている数字をもう一度確かめてください。";
+  if(t === "network" || t === "server-error" || t === "socket-error")
+    return "つなぐための通信ができませんでした。両方の端末がインターネットに繋がっているか確認してください。";
+  return "接続できませんでした。もう一度お試しください。";
+}
+
+/* ---------- 送る側（PC） ---------- */
+function startSend(files){
+  XFER.cancel = false;
+  XFER.busy = true;
+  const total = files.reduce((s, f) => s + f.size, 0);
+
+  openSheet(`
+    <h3>別の端末へ曲を送る</h3>
+    <p class="sub">${files.length}曲・${fmtBytes(total)}</p>
+    <div id="xferBody" style="padding:0 12px 6px">
+      <p class="xfer-note">準備しています…</p>
+    </div>
+    <button class="sheet-item danger" id="xferStop">やめる</button>`);
+  $("xferStop").addEventListener("click", () => { endTransfer(); closeSheet(); });
+
+  loadPeerLib().then(() => {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const peer = new Peer("prism-" + code, { debug: 0 });
+    XFER.peer = peer;
+
+    peer.on("open", () => {
+      xferBody(`
+        <div class="code">${code}</div>
+        <p class="xfer-note">iPhoneのPrismで「＋」→「PCから受け取る」を開き、この数字を入れてください。</p>
+        <p class="xfer-note" style="margin-top:8px">つながるまで、この画面は開いたままにしてください。</p>`);
+    });
+    peer.on("error", err => xferError(peerErrorText(err)));
+    peer.on("connection", conn => {
+      XFER.conn = conn;
+      conn.on("open", () => sendAll(conn, files, total));
+      conn.on("error", () => xferError("転送中に接続が切れました。"));
+    });
+  }).catch(e => xferError(e.message));
+}
+
+function waitDrain(conn){
+  const dc = conn.dataChannel;
+  if(!dc || dc.bufferedAmount < XFER_HIGH) return Promise.resolve();
+  return new Promise(res => {
+    const check = () => {
+      if(XFER.cancel || !conn.dataChannel || conn.dataChannel.bufferedAmount < XFER_HIGH / 2) res();
+      else setTimeout(check, 60);
+    };
+    setTimeout(check, 60);
+  });
+}
+
+async function sendAll(conn, files, total){
+  let sent = 0;
+  const paint = (i, name) => {
+    const pct = total ? (sent / total) * 100 : 0;
+    xferBody(`
+      <div class="stat"><span>送っています</span><b>${i} / ${files.length} 曲</b></div>
+      <div class="gauge"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <p class="xfer-name">${esc(name)}</p>`);
+  };
+
+  conn.on("data", d => {
+    if(d && d.t === "ok"){
+      XFER.busy = false;
+      xferBody(`<p class="xfer-note">${files.length}曲を送り終えました。iPhone側にすべて入っています。</p>`);
+      xferDone();
+    }
+  });
+
+  try{
+    for(let i = 0; i < files.length; i++){
+      if(XFER.cancel) break;
+      const f = files[i];
+      paint(i + 1, f.name);
+      conn.send({ t:"meta", name: f.name, size: f.size, type: f.type || "audio/mpeg" });
+
+      let off = 0, since = 0;
+      while(off < f.size){
+        if(XFER.cancel) break;
+        const buf = await f.slice(off, off + XFER_CHUNK).arrayBuffer();
+        await waitDrain(conn);
+        if(XFER.cancel) break;
+        conn.send(buf);
+        off += buf.byteLength;
+        sent += buf.byteLength;
+        since += buf.byteLength;
+        if(since >= XFER_CHUNK * 8){ since = 0; paint(i + 1, f.name); }
+      }
+      if(XFER.cancel) break;
+      conn.send({ t:"end" });
+    }
+    if(!XFER.cancel){
+      conn.send({ t:"done" });
+      xferBody(`<p class="xfer-note">送信を終えました。iPhone側の取り込みを待っています…</p>`);
+    }
+  }catch(e){
+    xferError("転送の途中で問題が起きました。もう一度お試しください。");
+  }
+}
+
+/* ---------- 受け取る側（iPhone） ---------- */
+function startReceive(){
+  XFER.cancel = false;
+  XFER.busy = false;
+
+  openSheet(`
+    <h3>PCから受け取る</h3>
+    <p class="sub">PCのSafariやChromeでPrismを開き、設定タブの「別の端末へ曲を送る」から数字を出してください。</p>
+    <div style="padding:0 12px">
+      <input class="field" id="xferCode" inputmode="numeric" enterkeyhint="go"
+             autocomplete="off" maxlength="6" placeholder="6桁の数字">
+      <button class="cta" id="xferGo" style="width:100%;justify-content:center">つなぐ</button>
+    </div>
+    <div id="xferBody" style="padding:8px 12px 0"></div>
+    <button class="sheet-item danger" id="xferStop">やめる</button>`);
+
+  $("xferStop").addEventListener("click", () => { endTransfer(); closeSheet(); });
+  const go = () => {
+    const code = ($("xferCode").value || "").replace(/\D/g, "");
+    if(code.length !== 6){ toast("6桁の数字を入れてください"); return; }
+    connectAndReceive(code);
+  };
+  $("xferGo").addEventListener("click", go);
+  $("xferCode").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); go(); } });
+  setTimeout(() => $("xferCode") && $("xferCode").focus(), 260);
+}
+
+function connectAndReceive(code){
+  XFER.busy = true;
+  xferBody(`<p class="xfer-note">つないでいます…</p>`);
+
+  loadPeerLib().then(() => {
+    const peer = new Peer({ debug: 0 });
+    XFER.peer = peer;
+
+    peer.on("error", err => xferError(peerErrorText(err)));
+    peer.on("open", () => {
+      const conn = peer.connect("prism-" + code, { reliable: true });
+      XFER.conn = conn;
+      conn.on("error", () => xferError("接続が切れました。"));
+      conn.on("open", () => {
+        xferBody(`<p class="xfer-note">つながりました。PCから曲が届くのを待っています…</p>`);
+        receiveOn(conn);
+      });
+    });
+  }).catch(e => xferError(e.message));
+}
+
+function toArrayBuffer(d){
+  if(d instanceof ArrayBuffer) return d;
+  if(ArrayBuffer.isView(d)) return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
+  return null;
+}
+
+function receiveOn(conn){
+  const rx = { meta:null, parts:[], got:0, added:0, skipped:0, files:0, base:Date.now(), stop:false };
+  // 保存はIndexedDBへの書き込みを挟むので、届いた順に1件ずつ片付ける
+  let chain = Promise.resolve();
+
+  const paint = () => {
+    const pct = rx.meta && rx.meta.size ? (rx.got / rx.meta.size) * 100 : 0;
+    xferBody(`
+      <div class="stat"><span>受け取っています</span><b>${rx.added + rx.skipped} 曲 完了</b></div>
+      <div class="gauge"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <p class="xfer-name">${rx.meta ? esc(rx.meta.name) : ""}</p>`);
+  };
+
+  const saveOne = async () => {
+    if(!rx.meta) return;
+    const meta = rx.meta, parts = rx.parts;
+    rx.meta = null; rx.parts = []; rx.got = 0;
+
+    const blob = new Blob(parts, { type: meta.type || "audio/mpeg" });
+    if(S.tracks.some(t => t.fileName === meta.name && t.fileSize === blob.size)){
+      rx.skipped++; paint(); return;
+    }
+    try{
+      const dur = await readDuration(blob);
+      const p = parseName(meta.name);
+      const rec = {
+        id: uid(), title: p.title, artist: p.artist, album: "",
+        duration: dur, fileName: meta.name, fileSize: blob.size,
+        blob: blob, addedAt: rx.base + (rx.files++)
+      };
+      await dbPut("tracks", rec);
+      const { blob: _b, ...m } = rec;
+      S.tracks.push(m);
+      rx.added++;
+      paint();
+    }catch(e){
+      // ここに来るのはほぼ保存容量の上限
+      rx.stop = true;
+      S.importError = {
+        at: Date.now(), fileName: meta.name, addedThisTime: rx.added,
+        bytesAtFailure: S.tracks.reduce((s, t) => s + (t.fileSize || 0), 0),
+        tracksAtFailure: S.tracks.length
+      };
+      await saveSettings();
+      endTransfer();
+      closeSheet();
+      render();
+      showImportError();
+    }
+  };
+
+  const finish = () => {
+    XFER.busy = false;
+    render();
+    rememberLibrarySize();
+    xferBody(`
+      <p class="xfer-note">受け取りました。<b>${rx.added}曲を追加</b>${rx.skipped ? "・" + rx.skipped + "曲は同じものがあったので飛ばしました" : ""}。</p>
+      <p class="xfer-note" style="margin-top:8px">この画面は閉じてかまいません。</p>`);
+    xferDone();
+    try{ conn.send({ t:"ok" }); }catch(e){}
+  };
+
+  conn.on("data", data => {
+    chain = chain.then(async () => {
+      if(rx.stop) return;
+      if(data && data.t === "meta"){
+        rx.meta = { name: data.name, size: data.size, type: data.type };
+        rx.parts = []; rx.got = 0;
+        paint();
+      }else if(data && data.t === "end"){
+        await saveOne();
+      }else if(data && data.t === "done"){
+        finish();
+      }else{
+        const buf = toArrayBuffer(data);
+        if(buf && rx.meta){
+          rx.parts.push(buf);
+          rx.got += buf.byteLength;
+          if(rx.parts.length % 8 === 0) paint();
+        }
+      }
+    }).catch(() => {});
+  });
+
+  conn.on("close", () => {
+    if(XFER.busy){ XFER.busy = false; xferBody(`<p class="xfer-note">接続が切れました。届いたぶんは保存されています。</p>`); render(); }
+  });
+}
+
+/* 「＋」から何をするか選ばせる */
+function openAddMenu(){
+  openSheet(`
+    <h3>曲を追加</h3>
+    <button class="sheet-item" id="addFile">iPhoneの中のファイルから選ぶ</button>
+    <button class="sheet-item" id="addRecv">PCから受け取る</button>`);
+  $("addFile").addEventListener("click", () => { closeSheet(); $("filePicker").click(); });
+  $("addRecv").addEventListener("click", () => { startReceive(); });
+}
+
+$("sendPicker").addEventListener("change", e => {
+  const files = Array.from(e.target.files)
+    .filter(f => /mp3|mpeg/i.test(f.type) || /\.mp3$/i.test(f.name));
+  e.target.value = "";
+  if(files.length) startSend(files);
+  else toast("mp3ファイルが見つかりません");
+});
+
+/* ============================================================
    11-b. iOSの音声ロック解除
    iOSは「ユーザーが触った瞬間」以外の再生開始を拒否する。
    曲の読み込みはファイル取り出しを挟むため、その瞬間から少しずれる。
@@ -1858,6 +2219,15 @@ document.addEventListener("click",    unlockAudio, {capture:true, once:true});
   $("btnShuffle").setAttribute("aria-pressed", S.shuffle);
   applyRepeatUI();
   render();
+
+  // 前回の曲数と突き合わせ、消えていれば知らせる
+  let prevLib = null;
+  try{ prevLib = JSON.parse(localStorage.getItem("prism.lib") || "null"); }catch(e){}
+  if(prevLib && prevLib.n > 0 && S.tracks.length === 0){
+    setTimeout(() => showDataLoss(prevLib), 700);
+  }else{
+    rememberLibrarySize();
+  }
 
   // 前回の続きを復元（自動再生はしない。iOSは操作なしの再生を認めないため）
   if(cfg && cfg.lastTrackId && trackById(cfg.lastTrackId)){
