@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>Prism — 音楽プレイヤー</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Prism">
+<meta name="theme-color" content="#0B0716">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Prism — design tokens
+   色は装飾ではなく状態を表す:
+     pink   = 再生中 / いま鳴っているもの
+     blue   = ライブラリ
+     violet = プレイリスト
+     green  = シャッフル・リピートが有効
+   ============================================================ */
+:root{
+  --ink:      #0B0716;
+  --ink-2:    #150E28;
+  --surface:  rgba(255,255,255,.055);
+  --surface-2:rgba(255,255,255,.10);
+  --hairline: rgba(255,255,255,.09);
+
+  --pink:   #FF4D93;
+  --violet: #A66BFF;
+  --blue:   #3FC9F5;
+  --green:  #3DE39B;
+
+  --text:   #F2EDFF;
+  --muted:  #8E82AE;
+  --danger: #FF6B6B;
+
+  --display: "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
+  --body: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+          "Yu Gothic", Meiryo, sans-serif;
+
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;
+
+  --tab-h: 58px;
+  --mini-h: 62px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+}
+
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  margin:0;
+  background:var(--ink);
+  color:var(--text);
+  font-family:var(--body);
+  font-size:15px;
+  line-height:1.5;
+  overflow:hidden;
+  overscroll-behavior:none;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit; color:inherit; border:0; background:none; padding:0; cursor:pointer;}
+input{font-family:inherit;}
+
+/* ---------- signature: aurora ----------
+   再生中だけ動く。止めれば静止する。 */
+#aurora{
+  position:fixed; inset:-25%; z-index:0; pointer-events:none;
+  filter:blur(70px); opacity:.5;
+  transition:opacity .9s ease;
+}
+#aurora span{
+  position:absolute; width:62vmax; height:62vmax; border-radius:50%;
+  animation:drift 26s ease-in-out infinite alternate;
+  animation-play-state:paused;
+}
+#aurora span:nth-child(1){background:radial-gradient(circle,var(--pink),transparent 62%);   top:-12%; left:-14%; animation-duration:24s;}
+#aurora span:nth-child(2){background:radial-gradient(circle,var(--violet),transparent 62%); top:16%;  right:-22%; animation-duration:31s; animation-delay:-6s;}
+#aurora span:nth-child(3){background:radial-gradient(circle,var(--blue),transparent 62%);   bottom:-16%; left:-8%; animation-duration:28s; animation-delay:-12s;}
+#aurora span:nth-child(4){background:radial-gradient(circle,var(--green),transparent 62%);  bottom:2%; right:-14%; animation-duration:35s; animation-delay:-3s;}
+body.playing #aurora{opacity:.78;}
+body.playing #aurora span{animation-play-state:running;}
+@keyframes drift{
+  0%  {transform:translate3d(0,0,0) scale(1);}
+  50% {transform:translate3d(9vmax,-7vmax,0) scale(1.18);}
+  100%{transform:translate3d(-7vmax,8vmax,0) scale(.92);}
+}
+
+/* ---------- app shell ---------- */
+#app{position:relative; z-index:1; height:100%; display:flex; flex-direction:column;}
+
+header{
+  padding:calc(var(--safe-t) + 18px) 20px 10px;
+  flex:0 0 auto;
+}
+.eyebrow{
+  font-family:var(--display); font-size:10px; font-weight:500;
+  letter-spacing:.22em; text-transform:uppercase; color:var(--muted);
+  display:flex; align-items:center; gap:8px;
+}
+.eyebrow::before{content:""; width:6px; height:6px; border-radius:50%; background:var(--accent,var(--blue));}
+h1{
+  margin:2px 0 0; font-size:27px; font-weight:700; letter-spacing:-.02em;
+}
+
+main{flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:0 20px;
+     padding-bottom:calc(var(--tab-h) + var(--mini-h) + var(--safe-b) + 20px);}
+
+/* ---------- controls row ---------- */
+.toolbar{display:flex; gap:10px; margin:14px 0 8px;}
+.search{
+  flex:1; display:flex; align-items:center; gap:9px;
+  background:var(--surface); border:1px solid var(--hairline);
+  border-radius:var(--r-md); padding:0 13px; height:42px;
+  transition:border-color .2s, background .2s;
+}
+.search:focus-within{border-color:rgba(63,201,245,.55); background:rgba(63,201,245,.07);}
+.search input{flex:1; background:none; border:0; outline:none; color:var(--text); font-size:15px;}
+.search input::placeholder{color:var(--muted);}
+.icon-btn{
+  width:42px; height:42px; flex:0 0 auto; border-radius:var(--r-md);
+  background:var(--surface); border:1px solid var(--hairline);
+  display:grid; place-items:center; transition:transform .15s, background .2s;
+}
+.icon-btn:active{transform:scale(.92);}
+
+/* ---------- sort chips ---------- */
+.chips{display:flex; gap:7px; margin:4px 0 14px; flex-wrap:wrap;}
+.chip{
+  font-family:var(--display); font-size:11px; font-weight:500; letter-spacing:.08em;
+  padding:6px 12px; border-radius:999px;
+  background:var(--surface); border:1px solid var(--hairline); color:var(--muted);
+  transition:.2s;
+}
+.chip[aria-pressed="true"]{
+  color:var(--ink); background:var(--blue); border-color:transparent; font-weight:700;
+}
+
+/* ---------- track list ---------- */
+.rows{display:flex; flex-direction:column;}
+.row{
+  display:flex; align-items:center; gap:13px;
+  padding:11px 4px; border-bottom:1px solid var(--hairline);
+  transition:background .18s;
+  animation:rise .32s both;
+}
+@keyframes rise{from{opacity:0; transform:translateY(9px);} to{opacity:1; transform:none;}}
+.row:active{background:var(--surface);}
+.row .idx{
+  font-family:var(--display); font-size:12px; color:var(--muted);
+  width:22px; flex:0 0 auto; text-align:center; font-variant-numeric:tabular-nums;
+}
+.row .meta{flex:1; min-width:0;}
+.row .t{font-size:15px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.row .a{font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.row .d{font-family:var(--display); font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums;}
+.row .more{width:30px; height:30px; flex:0 0 auto; display:grid; place-items:center; color:var(--muted); border-radius:8px;}
+.row.current .t{color:var(--pink);}
+.row.current .idx{color:var(--pink);}
+
+/* 再生中インジケータ（3本バー） */
+.bars{display:flex; align-items:flex-end; gap:2px; height:13px; justify-content:center;}
+.bars i{width:2.5px; background:var(--pink); border-radius:2px; height:35%;
+        animation:eq .9s ease-in-out infinite alternate; animation-play-state:paused;}
+.bars i:nth-child(2){animation-delay:-.35s; height:80%;}
+.bars i:nth-child(3){animation-delay:-.6s; height:55%;}
+body.playing .bars i{animation-play-state:running;}
+@keyframes eq{from{height:22%;} to{height:100%;}}
+
+/* ---------- empty state ---------- */
+.empty{text-align:center; padding:56px 24px; animation:rise .4s both;}
+.empty .glyph{
+  width:74px; height:74px; margin:0 auto 18px; border-radius:22px;
+  background:linear-gradient(140deg,var(--pink),var(--violet) 40%,var(--blue) 72%,var(--green));
+  display:grid; place-items:center; box-shadow:0 12px 40px rgba(166,107,255,.3);
+}
+.empty h2{font-size:18px; margin:0 0 7px; font-weight:700;}
+.empty p{color:var(--muted); font-size:13.5px; margin:0 auto; max-width:270px; line-height:1.7;}
+
+/* ---------- primary button ---------- */
+.cta{
+  display:inline-flex; align-items:center; gap:8px; margin-top:20px;
+  padding:13px 24px; border-radius:999px; font-weight:700; font-size:14.5px;
+  background:linear-gradient(100deg,var(--pink),var(--violet));
+  color:#fff; box-shadow:0 8px 26px rgba(255,77,147,.32);
+  transition:transform .15s;
+}
+.cta:active{transform:scale(.95);}
+
+/* ---------- mini player ---------- */
+#mini{
+  position:fixed; left:10px; right:10px;
+  bottom:calc(var(--tab-h) + var(--safe-b) + 8px);
+  height:var(--mini-h); z-index:20;
+  background:rgba(21,14,40,.82);
+  -webkit-backdrop-filter:saturate(180%) blur(22px);
+  backdrop-filter:saturate(180%) blur(22px);
+  border:1px solid var(--hairline); border-radius:18px;
+  display:flex; align-items:center; gap:12px; padding:0 8px 0 15px;
+  transform:translateY(140%); transition:transform .38s cubic-bezier(.3,1.2,.4,1);
+  overflow:hidden;
+}
+#mini.show{transform:none;}
+#mini .bar{position:absolute; left:0; bottom:0; height:2px; width:0;
+  background:linear-gradient(90deg,var(--pink),var(--violet),var(--blue)); transition:width .25s linear;}
+#mini .meta{flex:1; min-width:0;}
+#mini .t{font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+#mini .a{font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+#mini button{width:44px; height:44px; display:grid; place-items:center; border-radius:12px;}
+#mini button:active{background:var(--surface);}
+
+/* ---------- tab bar ---------- */
+#tabs{
+  position:fixed; left:0; right:0; bottom:0; z-index:21;
+  height:calc(var(--tab-h) + var(--safe-b)); padding-bottom:var(--safe-b);
+  background:rgba(11,7,22,.9);
+  -webkit-backdrop-filter:blur(22px); backdrop-filter:blur(22px);
+  border-top:1px solid var(--hairline);
+  display:flex;
+}
+#tabs button{
+  flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.04em;
+  transition:color .2s;
+}
+#tabs button svg{transition:transform .2s;}
+#tabs button:active svg{transform:scale(.85);}
+#tabs button[aria-selected="true"]{color:var(--tab-color);}
+
+/* ---------- now playing sheet ---------- */
+#np{
+  position:fixed; inset:0; z-index:40;
+  background:linear-gradient(175deg,#1B1030,var(--ink) 62%);
+  display:flex; flex-direction:column;
+  padding:calc(var(--safe-t) + 12px) 26px calc(var(--safe-b) + 26px);
+  transform:translateY(100%); transition:transform .42s cubic-bezier(.32,.9,.3,1);
+  overflow:hidden;
+}
+#np.show{transform:none;}
+#np .grab{width:38px; height:4px; border-radius:4px; background:var(--surface-2); margin:0 auto 6px;}
+#np .close{align-self:flex-start; padding:10px 4px; color:var(--muted); font-size:13px;}
+
+.art{
+  position:relative; width:100%; aspect-ratio:1; max-height:44vh; margin:8px auto 0;
+  border-radius:30px; overflow:hidden;
+  background:linear-gradient(140deg,var(--pink),var(--violet) 38%,var(--blue) 70%,var(--green));
+  display:grid; place-items:center;
+  box-shadow:0 26px 70px rgba(0,0,0,.55);
+}
+.art::after{
+  content:""; position:absolute; inset:0;
+  background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.42), transparent 55%);
+  mix-blend-mode:overlay;
+  animation:sheen 9s ease-in-out infinite alternate; animation-play-state:paused;
+}
+body.playing .art::after{animation-play-state:running;}
+@keyframes sheen{from{transform:translate(-9%,-6%) scale(1);} to{transform:translate(10%,8%) scale(1.25);}}
+.art svg{position:relative; opacity:.9; filter:drop-shadow(0 4px 14px rgba(0,0,0,.3));}
+
+#np .titles{margin:26px 0 0; text-align:center;}
+#np .titles h2{margin:0; font-size:22px; font-weight:700; letter-spacing:-.01em;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+#np .titles p{margin:5px 0 0; color:var(--muted); font-size:14px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+
+/* seek */
+.seek{margin-top:24px;}
+.seek input{
+  -webkit-appearance:none; width:100%; height:22px; background:none; outline:none; display:block;
+}
+.seek input::-webkit-slider-runnable-track{
+  height:5px; border-radius:5px;
+  background:linear-gradient(90deg,var(--pink) 0 var(--pct,0%), rgba(255,255,255,.14) var(--pct,0%) 100%);
+}
+.seek input::-webkit-slider-thumb{
+  -webkit-appearance:none; width:15px; height:15px; border-radius:50%; background:#fff;
+  margin-top:-5px; box-shadow:0 2px 10px rgba(255,77,147,.75);
+}
+.times{display:flex; justify-content:space-between; font-family:var(--display);
+  font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; margin-top:-1px;}
+
+/* transport */
+.transport{display:flex; align-items:center; justify-content:space-between; margin-top:22px;}
+.transport button{width:54px; height:54px; display:grid; place-items:center; border-radius:50%; transition:transform .14s;}
+.transport button:active{transform:scale(.88);}
+.play-btn{
+  width:74px !important; height:74px !important;
+  background:linear-gradient(135deg,var(--pink),var(--violet));
+  box-shadow:0 10px 32px rgba(255,77,147,.42);
+}
+.mode-btn[aria-pressed="true"]{color:var(--green);}
+.mode-btn[aria-pressed="true"]::after{
+  content:""; position:absolute; width:4px; height:4px; border-radius:50%;
+  background:var(--green); margin-top:30px;
+}
+.mode-btn{position:relative; color:var(--muted);}
+.mode-btn .badge{
+  position:absolute; top:9px; right:9px; font-family:var(--display);
+  font-size:9px; font-weight:700; color:var(--green);
+}
+
+/* ---------- playlists ---------- */
+.pl-card{
+  display:flex; align-items:center; gap:14px; padding:14px;
+  background:var(--surface); border:1px solid var(--hairline);
+  border-radius:var(--r-md); margin-bottom:10px;
+  animation:rise .3s both; transition:background .2s;
+}
+.pl-card:active{background:var(--surface-2);}
+.pl-card .cover{
+  width:50px; height:50px; border-radius:13px; flex:0 0 auto; display:grid; place-items:center;
+  background:linear-gradient(140deg,var(--violet),var(--blue));
+}
+.pl-card .meta{flex:1; min-width:0;}
+.pl-card .t{font-weight:600; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.pl-card .a{font-size:12px; color:var(--muted);}
+
+/* ---------- settings ---------- */
+.card{
+  background:var(--surface); border:1px solid var(--hairline);
+  border-radius:var(--r-md); padding:16px; margin-bottom:12px;
+  animation:rise .3s both;
+}
+.card h3{margin:0 0 10px; font-size:13px; font-weight:700; letter-spacing:.02em;}
+.card p{margin:0; color:var(--muted); font-size:12.5px; line-height:1.75;}
+.gauge{height:8px; border-radius:8px; background:rgba(255,255,255,.1); overflow:hidden; margin:12px 0 8px;}
+.gauge i{display:block; height:100%; border-radius:8px;
+  background:linear-gradient(90deg,var(--green),var(--blue),var(--violet)); transition:width .6s;}
+.stat{display:flex; justify-content:space-between; font-family:var(--display);
+  font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums;}
+.stat b{color:var(--text); font-weight:700;}
+.linkbtn{
+  display:block; width:100%; text-align:left; padding:14px 16px; margin-bottom:10px;
+  background:var(--surface); border:1px solid var(--hairline); border-radius:var(--r-md);
+  font-size:14px; font-weight:500; transition:background .2s;
+}
+.linkbtn:active{background:var(--surface-2);}
+.linkbtn.danger{color:var(--danger);}
+
+/* ---------- sheet (action / prompt) ---------- */
+#scrim{position:fixed; inset:0; z-index:50; background:rgba(5,3,12,.6);
+  -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+  opacity:0; pointer-events:none; transition:opacity .28s;}
+#scrim.show{opacity:1; pointer-events:auto;}
+#sheet{
+  position:fixed; left:8px; right:8px; bottom:0; z-index:51;
+  background:#1A1130; border:1px solid var(--hairline);
+  border-radius:24px 24px 0 0; padding:10px 10px calc(var(--safe-b) + 14px);
+  transform:translateY(110%); transition:transform .34s cubic-bezier(.3,1.05,.4,1);
+  max-height:80vh; overflow-y:auto;
+}
+#sheet.show{transform:none;}
+#sheet .grab{width:38px; height:4px; border-radius:4px; background:var(--surface-2); margin:4px auto 12px;}
+#sheet h3{margin:0 0 4px; padding:0 12px; font-size:16px;}
+#sheet .sub{margin:0 0 12px; padding:0 12px; color:var(--muted); font-size:12.5px;}
+.sheet-item{
+  display:flex; align-items:center; gap:12px; width:100%;
+  padding:14px 14px; border-radius:14px; font-size:15px; text-align:left;
+  transition:background .18s;
+}
+.sheet-item:active{background:var(--surface);}
+.sheet-item.danger{color:var(--danger);}
+.field{
+  width:100%; height:46px; padding:0 14px; margin:0 0 10px;
+  background:var(--surface); border:1px solid var(--hairline); border-radius:14px;
+  color:var(--text); font-size:15px; outline:none;
+}
+.field:focus{border-color:rgba(166,107,255,.6);}
+
+/* ---------- toast ---------- */
+#toast{
+  position:fixed; left:50%; bottom:calc(var(--tab-h) + var(--mini-h) + var(--safe-b) + 26px);
+  transform:translate(-50%,16px); z-index:60;
+  background:rgba(26,17,48,.96); border:1px solid var(--hairline);
+  padding:11px 18px; border-radius:999px; font-size:13px; font-weight:500;
+  opacity:0; pointer-events:none; transition:opacity .25s, transform .25s;
+  max-width:88vw; text-align:center;
+}
+#toast.show{opacity:1; transform:translate(-50%,0);}
+
+/* ---------- progress overlay ---------- */
+#busy{
+  position:fixed; inset:0; z-index:70; display:none;
+  place-items:center; background:rgba(11,7,22,.86);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+}
+#busy.show{display:grid;}
+#busy .ring{
+  width:56px; height:56px; border-radius:50%;
+  border:3px solid rgba(255,255,255,.12); border-top-color:var(--pink);
+  animation:spin .8s linear infinite; margin:0 auto 16px;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+#busy .txt{text-align:center; font-size:14px; font-weight:600;}
+#busy .sub{text-align:center; font-size:12px; color:var(--muted); margin-top:5px;}
+
+.hidden{display:none !important;}
+
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.001s !important; transition-duration:.05s !important;}
+}
+</style>
+</head>
+<body>
+
+<div id="aurora"><span></span><span></span><span></span><span></span></div>
+
+<div id="app">
+  <header>
+    <div class="eyebrow" id="eyebrow">Library</div>
+    <h1 id="pageTitle">ライブラリ</h1>
+  </header>
+  <main id="main"></main>
+</div>
+
+<!-- mini player -->
+<div id="mini">
+  <div class="bar" id="miniBar"></div>
+  <div class="meta" id="miniOpen">
+    <div class="t" id="miniTitle">—</div>
+    <div class="a" id="miniArtist">—</div>
+  </div>
+  <button id="miniPlay" aria-label="再生"></button>
+  <button id="miniNext" aria-label="次の曲"></button>
+</div>
+
+<!-- tabs -->
+<nav id="tabs">
+  <button data-view="library" aria-selected="true" style="--tab-color:var(--blue)">
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    <span>ライブラリ</span>
+  </button>
+  <button data-view="playlists" style="--tab-color:var(--violet)">
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="15" y2="6"/><line x1="3" y1="12" x2="12" y2="12"/><line x1="3" y1="18" x2="12" y2="18"/><path d="M18 18V9l4-1"/><circle cx="16" cy="18" r="2"/></svg>
+    <span>プレイリスト</span>
+  </button>
+  <button data-view="settings" style="--tab-color:var(--green)">
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    <span>設定</span>
+  </button>
+</nav>
+
+<!-- now playing -->
+<section id="np" aria-hidden="true">
+  <div class="grab"></div>
+  <button class="close" id="npClose">▾ 閉じる</button>
+  <div class="art">
+    <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+  </div>
+  <div class="titles">
+    <h2 id="npTitle">—</h2>
+    <p id="npArtist">—</p>
+  </div>
+  <div class="seek">
+    <input type="range" id="seek" min="0" max="1000" value="0" step="1" aria-label="再生位置">
+    <div class="times"><span id="tCur">0:00</span><span id="tTot">0:00</span></div>
+  </div>
+  <div class="transport">
+    <button class="mode-btn" id="btnShuffle" aria-pressed="false" aria-label="シャッフル">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/></svg>
+    </button>
+    <button id="btnPrev" aria-label="前の曲">
+      <svg width="27" height="27" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2.5v12H6zM20 6v12L9.5 12z"/></svg>
+    </button>
+    <button class="play-btn" id="btnPlay" aria-label="再生"></button>
+    <button id="btnNext" aria-label="次の曲">
+      <svg width="27" height="27" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 6H18v12h-2.5zM4 6v12l10.5-6z"/></svg>
+    </button>
+    <button class="mode-btn" id="btnRepeat" aria-pressed="false" aria-label="リピート">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+      <span class="badge hidden" id="repBadge">1</span>
+    </button>
+  </div>
+</section>
+
+<div id="scrim"></div>
+<div id="sheet"><div class="grab"></div><div id="sheetBody"></div></div>
+<div id="toast"></div>
+<div id="busy"><div><div class="ring"></div><div class="txt" id="busyTxt">読み込み中</div><div class="sub" id="busySub"></div></div></div>
+
+<input type="file" id="filePicker" accept="audio/mpeg,audio/mp3,.mp3" multiple class="hidden">
+<audio id="audio" preload="metadata"></audio>
+
+<script>
+"use strict";
+
+/* ============================================================
+   1. データ層 — IndexedDB
+   ============================================================ */
+const DB_NAME = "prism-music", DB_VER = 1;
+let db;
+
+function openDB(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, DB_VER);
+    r.onupgradeneeded = e => {
+      const d = e.target.result;
+      if(!d.objectStoreNames.contains("tracks"))    d.createObjectStore("tracks", {keyPath:"id"});
+      if(!d.objectStoreNames.contains("playlists")) d.createObjectStore("playlists", {keyPath:"id"});
+      if(!d.objectStoreNames.contains("settings"))  d.createObjectStore("settings", {keyPath:"key"});
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+const tx = (store, mode) => db.transaction(store, mode).objectStore(store);
+const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+const dbAll = s      => req(tx(s, "readonly").getAll());
+const dbGet = (s, k) => req(tx(s, "readonly").get(k));
+const dbPut = (s, v) => req(tx(s, "readwrite").put(v));
+const dbDel = (s, k) => req(tx(s, "readwrite").delete(k));
+
+/* ============================================================
+   2. 状態
+   ============================================================ */
+const S = {
+  tracks: [],          // メタデータのみ（Blobは都度読む）
+  playlists: [],
+  view: "library",
+  activePlaylistId: null,
+  query: "",
+  sort: "addedAt",
+  queue: [],           // 再生対象のtrack idの配列
+  order: [],           // queueに対する再生順（シャッフル時は並び替え済み）
+  pos: -1,             // orderの位置
+  currentId: null,
+  repeat: "off",       // off | one | all
+  shuffle: false,
+  objectUrl: null,
+  ctxOpen: false
+};
+
+const audio = document.getElementById("audio");
+const $ = id => document.getElementById(id);
+
+/* ============================================================
+   3. ユーティリティ
+   ============================================================ */
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+function fmtTime(sec){
+  if(!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return m + ":" + String(s).padStart(2, "0");
+}
+function fmtBytes(b){
+  if(b < 1024) return b + " B";
+  if(b < 1048576) return (b / 1024).toFixed(0) + " KB";
+  if(b < 1073741824) return (b / 1048576).toFixed(1) + " MB";
+  return (b / 1073741824).toFixed(2) + " GB";
+}
+let toastTimer;
+function toast(msg){
+  const t = $("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+function busy(on, txt, sub){
+  $("busy").classList.toggle("show", on);
+  if(txt !== undefined) $("busyTxt").textContent = txt;
+  $("busySub").textContent = sub || "";
+}
+function esc(s){
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+/* ファイル名から曲名・アーティストを推定 */
+function parseName(fileName){
+  let n = fileName.replace(/\.(mp3|MP3)$/, "").trim();
+  n = n.replace(/^\d{1,3}[\s._-]+/, "");           // 先頭のトラック番号を除去
+  const m = n.match(/^(.+?)\s*[-–—]\s*(.+)$/);      // 「アーティスト - 曲名」
+  if(m) return { artist: m[1].trim(), title: m[2].trim() };
+  return { artist: "不明なアーティスト", title: n };
+}
+
+/* Blobから再生時間を取得 */
+function readDuration(blob){
+  return new Promise(res => {
+    const url = URL.createObjectURL(blob);
+    const a = new Audio();
+    const done = d => { URL.revokeObjectURL(url); res(d); };
+    a.addEventListener("loadedmetadata", () => done(isFinite(a.duration) ? a.duration : 0));
+    a.addEventListener("error", () => done(0));
+    setTimeout(() => done(isFinite(a.duration) ? a.duration : 0), 6000);
+    a.src = url;
+  });
+}
+
+/* ============================================================
+   4. 設定の保存・復元
+   ============================================================ */
+async function saveSettings(extra){
+  const v = Object.assign({
+    key: "app",
+    repeat: S.repeat,
+    shuffle: S.shuffle,
+    sort: S.sort,
+    lastTrackId: S.currentId,
+    lastPos: audio.currentTime || 0
+  }, extra || {});
+  try { await dbPut("settings", v); } catch(e){}
+}
+let saveTimer;
+const saveSoon = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveSettings, 1200); };
+
+/* ============================================================
+   5. 取り込み
+   ============================================================ */
+async function importFiles(fileList){
+  const files = Array.from(fileList).filter(f => /mp3|mpeg/i.test(f.type) || /\.mp3$/i.test(f.name));
+  if(!files.length){ toast("mp3ファイルが見つかりません"); return; }
+
+  const existing = new Set(S.tracks.map(t => t.fileName + "|" + t.fileSize));
+  let added = 0, skipped = 0;
+
+  busy(true, "取り込んでいます", "0 / " + files.length);
+  for(let i = 0; i < files.length; i++){
+    const f = files[i];
+    $("busySub").textContent = (i + 1) + " / " + files.length;
+    const key = f.name + "|" + f.size;
+    if(existing.has(key)){ skipped++; continue; }
+
+    try{
+      const dur = await readDuration(f);
+      const p = parseName(f.name);
+      const rec = {
+        id: uid(), title: p.title, artist: p.artist, album: "",
+        duration: dur, fileName: f.name, fileSize: f.size,
+        blob: f, addedAt: Date.now()
+      };
+      await dbPut("tracks", rec);
+      existing.add(key);
+      const { blob, ...meta } = rec;
+      S.tracks.push(meta);
+      added++;
+    }catch(err){
+      console.error("import failed", f.name, err);
+      // 容量オーバーはここで出る
+      busy(false);
+      toast("保存に失敗しました（容量不足の可能性）");
+      render();
+      return;
+    }
+  }
+  busy(false);
+  render();
+  toast(added + "曲を追加" + (skipped ? "・" + skipped + "曲は重複でスキップ" : ""));
+}
+
+/* ============================================================
+   6. 再生エンジン
+   ============================================================ */
+function trackById(id){ return S.tracks.find(t => t.id === id); }
+
+function buildOrder(startId){
+  const n = S.queue.length;
+  let arr = Array.from({length:n}, (_, i) => i);
+  if(S.shuffle){
+    for(let i = n - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    // 選んだ曲を先頭へ
+    if(startId){
+      const qi = S.queue.indexOf(startId);
+      const oi = arr.indexOf(qi);
+      if(oi > 0){ arr.splice(oi, 1); arr.unshift(qi); }
+    }
+  }
+  S.order = arr;
+  S.pos = startId ? S.order.indexOf(S.queue.indexOf(startId)) : 0;
+  if(S.pos < 0) S.pos = 0;
+}
+
+async function playQueue(ids, startId){
+  if(!ids.length) return;
+  S.queue = ids.slice();
+  buildOrder(startId || ids[0]);
+  await loadCurrent(true);
+}
+
+async function loadCurrent(autoplay, seekTo){
+  const qi = S.order[S.pos];
+  const id = S.queue[qi];
+  if(!id) return;
+  const meta = trackById(id);
+  if(!meta) return;
+
+  let rec;
+  try{ rec = await dbGet("tracks", id); }catch(e){}
+  if(!rec || !rec.blob){ toast("ファイルを読み込めません"); return; }
+
+  if(S.objectUrl) URL.revokeObjectURL(S.objectUrl);
+  S.objectUrl = URL.createObjectURL(rec.blob);
+  S.currentId = id;
+  audio.src = S.objectUrl;
+
+  if(seekTo){
+    audio.addEventListener("loadedmetadata", () => { try{ audio.currentTime = seekTo; }catch(e){} }, {once:true});
+  }
+  updateNowPlaying(meta);
+  $("mini").classList.add("show");
+  renderList();
+
+  if(autoplay){
+    try{ await audio.play(); }
+    catch(e){ setPlayingUI(false); }
+  }
+  saveSettings();
+}
+
+function nextTrack(manual){
+  if(!S.queue.length) return;
+  if(!manual && S.repeat === "one"){
+    audio.currentTime = 0; audio.play().catch(()=>{});
+    return;
+  }
+  if(S.pos < S.order.length - 1){
+    S.pos++;
+    loadCurrent(true);
+  }else if(S.repeat === "all" || (manual && S.queue.length > 1)){
+    if(S.shuffle) buildOrder(null);   // 一巡したら並べ直す
+    S.pos = 0;
+    loadCurrent(true);
+  }else{
+    audio.pause();
+    audio.currentTime = 0;
+    setPlayingUI(false);
+  }
+}
+
+function prevTrack(){
+  if(audio.currentTime > 3){ audio.currentTime = 0; return; }
+  if(S.pos > 0){ S.pos--; loadCurrent(true); }
+  else{ audio.currentTime = 0; }
+}
+
+function togglePlay(){
+  if(!S.currentId){
+    const ids = visibleTracks().map(t => t.id);
+    if(ids.length) playQueue(ids, ids[0]);
+    return;
+  }
+  if(audio.paused) audio.play().catch(() => toast("再生できませんでした"));
+  else audio.pause();
+}
+
+/* ============================================================
+   7. Media Session（ロック画面・コントロールセンター）
+   ============================================================ */
+function updateNowPlaying(meta){
+  $("miniTitle").textContent = meta.title;
+  $("miniArtist").textContent = meta.artist;
+  $("npTitle").textContent = meta.title;
+  $("npArtist").textContent = meta.artist;
+  $("tTot").textContent = fmtTime(meta.duration);
+
+  if("mediaSession" in navigator){
+    try{
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: meta.title,
+        artist: meta.artist,
+        album: meta.album || "Prism",
+        artwork: [
+          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" }
+        ]
+      });
+    }catch(e){}
+  }
+}
+
+if("mediaSession" in navigator){
+  const set = (a, fn) => { try{ navigator.mediaSession.setActionHandler(a, fn); }catch(e){} };
+  set("play",          () => audio.play().catch(()=>{}));
+  set("pause",         () => audio.pause());
+  set("previoustrack", () => prevTrack());
+  set("nexttrack",     () => nextTrack(true));
+  set("seekto",        d => { if(d.seekTime != null) audio.currentTime = d.seekTime; });
+  set("seekbackward",  d => { audio.currentTime = Math.max(0, audio.currentTime - (d.seekOffset || 10)); });
+  set("seekforward",   d => { audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + (d.seekOffset || 10)); });
+}
+
+/* ============================================================
+   8. 再生イベント
+   ============================================================ */
+const ICON_PLAY  = '<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
+const ICON_PAUSE = '<svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>';
+const ICON_PLAY_S  = '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>';
+const ICON_PAUSE_S = '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>';
+const ICON_NEXT_S  = '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 6H18v12h-2.5zM4 6v12l10.5-6z"/></svg>';
+
+$("miniNext").innerHTML = ICON_NEXT_S;
+
+function setPlayingUI(on){
+  document.body.classList.toggle("playing", on);
+  $("btnPlay").innerHTML  = on ? ICON_PAUSE : ICON_PLAY;
+  $("miniPlay").innerHTML = on ? ICON_PAUSE_S : ICON_PLAY_S;
+  $("btnPlay").setAttribute("aria-label", on ? "一時停止" : "再生");
+  if("mediaSession" in navigator){
+    try{ navigator.mediaSession.playbackState = on ? "playing" : "paused"; }catch(e){}
+  }
+}
+setPlayingUI(false);
+
+audio.addEventListener("play",  () => setPlayingUI(true));
+audio.addEventListener("pause", () => { setPlayingUI(false); saveSettings(); });
+audio.addEventListener("ended", () => nextTrack(false));
+audio.addEventListener("error", () => { if(audio.src) toast("この曲を再生できません"); });
+
+let seeking = false;
+audio.addEventListener("timeupdate", () => {
+  const d = audio.duration || 0;
+  const pct = d ? (audio.currentTime / d) * 100 : 0;
+  $("miniBar").style.width = pct + "%";
+  if(!seeking){
+    $("seek").value = Math.round(pct * 10);
+    $("seek").style.setProperty("--pct", pct + "%");
+  }
+  $("tCur").textContent = fmtTime(audio.currentTime);
+  saveSoon();
+});
+audio.addEventListener("loadedmetadata", () => {
+  $("tTot").textContent = fmtTime(audio.duration);
+  // 取り込み時に長さが取れていなければここで補正
+  const t = trackById(S.currentId);
+  if(t && (!t.duration || t.duration < 1) && isFinite(audio.duration)){
+    t.duration = audio.duration;
+    dbGet("tracks", t.id).then(rec => { if(rec){ rec.duration = audio.duration; dbPut("tracks", rec); }});
+    renderList();
+  }
+});
+
+$("seek").addEventListener("input", e => {
+  seeking = true;
+  const pct = e.target.value / 10;
+  e.target.style.setProperty("--pct", pct + "%");
+  $("tCur").textContent = fmtTime((audio.duration || 0) * pct / 100);
+});
+$("seek").addEventListener("change", e => {
+  const d = audio.duration || 0;
+  if(d) audio.currentTime = d * (e.target.value / 1000);
+  seeking = false;
+});
+
+/* ============================================================
+   9. ビュー描画
+   ============================================================ */
+function visibleTracks(){
+  let list = S.tracks.slice();
+  const q = S.query.trim().toLowerCase();
+  if(q) list = list.filter(t => (t.title + " " + t.artist).toLowerCase().includes(q));
+  const by = S.sort;
+  list.sort((a, b) => {
+    if(by === "addedAt") return b.addedAt - a.addedAt;
+    if(by === "artist")  return a.artist.localeCompare(b.artist, "ja") || a.title.localeCompare(b.title, "ja");
+    return a.title.localeCompare(b.title, "ja");
+  });
+  return list;
+}
+
+const SVG_NOTE = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+const SVG_DOTS = '<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg>';
+
+function rowHTML(t, i){
+  const cur = t.id === S.currentId;
+  const idx = cur
+    ? '<span class="bars"><i></i><i></i><i></i></span>'
+    : (i + 1);
+  return `<div class="row ${cur ? "current" : ""}" data-id="${t.id}" style="animation-delay:${Math.min(i, 12) * 22}ms">
+    <span class="idx">${idx}</span>
+    <span class="meta"><span class="t">${esc(t.title)}</span><span class="a">${esc(t.artist)}</span></span>
+    <span class="d">${fmtTime(t.duration)}</span>
+    <button class="more" data-more="${t.id}" aria-label="操作">${SVG_DOTS}</button>
+  </div>`;
+}
+
+function render(){
+  const v = S.view;
+  const tabColors = { library: "var(--blue)", playlists: "var(--violet)", settings: "var(--green)" };
+  document.documentElement.style.setProperty("--accent", tabColors[v] || "var(--blue)");
+  document.querySelectorAll("#tabs button").forEach(b =>
+    b.setAttribute("aria-selected", b.dataset.view === v ? "true" : "false"));
+
+  if(v === "library")   renderLibrary();
+  if(v === "playlists") S.activePlaylistId ? renderPlaylistDetail() : renderPlaylists();
+  if(v === "settings")  renderSettings();
+}
+
+function renderLibrary(){
+  $("eyebrow").textContent = "Library";
+  $("pageTitle").textContent = "ライブラリ";
+  const list = visibleTracks();
+
+  const head = `
+    <div class="toolbar">
+      <label class="search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="q" type="search" placeholder="曲名・アーティストで検索" value="${esc(S.query)}">
+      </label>
+      <button class="icon-btn" id="btnAdd" aria-label="曲を追加">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+    <div class="chips">
+      <button class="chip" data-sort="addedAt" aria-pressed="${S.sort === "addedAt"}">追加順</button>
+      <button class="chip" data-sort="title"   aria-pressed="${S.sort === "title"}">曲名</button>
+      <button class="chip" data-sort="artist"  aria-pressed="${S.sort === "artist"}">アーティスト</button>
+    </div>`;
+
+  $("main").innerHTML = head + `<div id="results"></div>`;
+  renderResults();
+  bindLibrary();
+}
+
+/* 検索結果だけを描き直す。検索欄は作り直さないのでフォーカスが飛ばない。 */
+function renderResults(){
+  const box = $("results");
+  if(!box) return;
+  const list = visibleTracks();
+
+  if(!S.tracks.length){
+    box.innerHTML = `
+      <div class="empty">
+        <div class="glyph">${SVG_NOTE}</div>
+        <h2>まだ1曲も入っていません</h2>
+        <p>右上の＋から、iPhoneの「ファイル」アプリに置いたmp3を選んで追加します。</p>
+        <button class="cta" id="btnAdd2">＋ 曲を追加する</button>
+      </div>`;
+    $("btnAdd2").addEventListener("click", () => $("filePicker").click());
+  }else if(!list.length){
+    box.innerHTML = `<div class="empty"><h2>見つかりません</h2><p>「${esc(S.query)}」に一致する曲はありません。別の言葉で探してみてください。</p></div>`;
+  }else{
+    box.innerHTML = `<div class="rows" id="rows">${list.map(rowHTML).join("")}</div>`;
+  }
+}
+
+function renderList(){
+  // 再生中インジケータだけ差し替える（入力欄を壊さないため）
+  const rows = $("rows");
+  if(!rows) return;
+  rows.querySelectorAll(".row").forEach((el, i) => {
+    const cur = el.dataset.id === S.currentId;
+    el.classList.toggle("current", cur);
+    el.querySelector(".idx").innerHTML = cur
+      ? '<span class="bars"><i></i><i></i><i></i></span>'
+      : (i + 1);
+  });
+}
+
+function bindLibrary(){
+  const q = $("q");
+  if(q) q.addEventListener("input", e => { S.query = e.target.value; renderResults(); });
+
+  document.querySelectorAll("[data-sort]").forEach(b =>
+    b.addEventListener("click", () => {
+      S.sort = b.dataset.sort;
+      document.querySelectorAll("[data-sort]").forEach(x =>
+        x.setAttribute("aria-pressed", x.dataset.sort === S.sort));
+      saveSettings();
+      renderResults();
+    }));
+
+  $("btnAdd") && $("btnAdd").addEventListener("click", () => $("filePicker").click());
+}
+
+/* 行のタップ（委譲） */
+$("main").addEventListener("click", e => {
+  const more = e.target.closest("[data-more]");
+  if(more){ e.stopPropagation(); openTrackMenu(more.dataset.more); return; }
+  const row = e.target.closest(".row");
+  if(row){
+    if(S.view === "playlists" && S.activePlaylistId){
+      const pl = S.playlists.find(p => p.id === S.activePlaylistId);
+      playQueue(pl.trackIds.filter(trackById), row.dataset.id);
+    }else{
+      playQueue(visibleTracks().map(t => t.id), row.dataset.id);
+    }
+    return;
+  }
+  const card = e.target.closest("[data-pl]");
+  if(card){ S.activePlaylistId = card.dataset.pl; render(); }
+});
+
+/* ---------- プレイリスト ---------- */
+function renderPlaylists(){
+  $("eyebrow").textContent = "Playlists";
+  $("pageTitle").textContent = "プレイリスト";
+  const cards = S.playlists.map((p, i) => {
+    const n = p.trackIds.filter(trackById).length;
+    return `<div class="pl-card" data-pl="${p.id}" style="animation-delay:${i * 28}ms">
+      <span class="cover">${SVG_NOTE}</span>
+      <span class="meta"><span class="t">${esc(p.name)}</span><span class="a">${n}曲</span></span>
+      <button class="more" data-plmore="${p.id}" aria-label="操作">${SVG_DOTS}</button>
+    </div>`;
+  }).join("");
+
+  $("main").innerHTML = `
+    <div class="toolbar" style="margin-bottom:16px">
+      <button class="cta" id="btnNewPl" style="margin-top:0">＋ 新しいプレイリスト</button>
+    </div>
+    ${S.playlists.length ? cards : `
+      <div class="empty">
+        <div class="glyph" style="background:linear-gradient(140deg,var(--violet),var(--blue))">${SVG_NOTE}</div>
+        <h2>プレイリストはまだありません</h2>
+        <p>好きな曲だけを集めた並びを作れます。曲の「⋮」からも追加できます。</p>
+      </div>`}`;
+
+  $("btnNewPl").addEventListener("click", promptNewPlaylist);
+  document.querySelectorAll("[data-plmore]").forEach(b =>
+    b.addEventListener("click", e => { e.stopPropagation(); openPlaylistMenu(b.dataset.plmore); }));
+}
+
+function renderPlaylistDetail(){
+  const pl = S.playlists.find(p => p.id === S.activePlaylistId);
+  if(!pl){ S.activePlaylistId = null; return renderPlaylists(); }
+  const items = pl.trackIds.map(trackById).filter(Boolean);
+  $("eyebrow").textContent = "Playlist";
+  $("pageTitle").textContent = pl.name;
+
+  $("main").innerHTML = `
+    <div class="toolbar">
+      <button class="icon-btn" id="btnBack" aria-label="戻る">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--violet)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <button class="cta" id="btnPlayAll" style="margin-top:0;flex:1;justify-content:center;background:linear-gradient(100deg,var(--violet),var(--blue))">▶ すべて再生</button>
+    </div>
+    ${items.length
+      ? `<div class="rows" id="rows">${items.map(rowHTML).join("")}</div>`
+      : `<div class="empty"><h2>曲がありません</h2><p>ライブラリで曲の「⋮」をタップして、このプレイリストに追加してください。</p></div>`}`;
+
+  $("btnBack").addEventListener("click", () => { S.activePlaylistId = null; render(); });
+  $("btnPlayAll").addEventListener("click", () => {
+    const ids = items.map(t => t.id);
+    if(ids.length) playQueue(ids, ids[0]);
+  });
+}
+
+function promptNewPlaylist(){
+  openSheet(`
+    <h3>新しいプレイリスト</h3>
+    <p class="sub">あとから名前は変えられます。</p>
+    <div style="padding:0 12px">
+      <input class="field" id="plName" placeholder="例：作業用" maxlength="40">
+      <button class="cta" id="plCreate" style="width:100%;justify-content:center;margin-top:2px">作成</button>
+    </div>`);
+  setTimeout(() => $("plName") && $("plName").focus(), 260);
+  $("plCreate").addEventListener("click", async () => {
+    const name = ($("plName").value || "").trim() || "新しいプレイリスト";
+    const p = { id: uid(), name, trackIds: [], createdAt: Date.now(), updatedAt: Date.now() };
+    await dbPut("playlists", p);
+    S.playlists.push(p);
+    closeSheet(); render(); toast("「" + name + "」を作成しました");
+  });
+}
+
+function openPlaylistMenu(id){
+  const pl = S.playlists.find(p => p.id === id);
+  if(!pl) return;
+  openSheet(`
+    <h3>${esc(pl.name)}</h3>
+    <p class="sub">${pl.trackIds.filter(trackById).length}曲</p>
+    <button class="sheet-item" id="plRename">名前を変更</button>
+    <button class="sheet-item danger" id="plDelete">プレイリストを削除</button>`);
+  $("plRename").addEventListener("click", () => {
+    openSheet(`
+      <h3>名前を変更</h3>
+      <div style="padding:0 12px">
+        <input class="field" id="plName2" value="${esc(pl.name)}" maxlength="40">
+        <button class="cta" id="plSave" style="width:100%;justify-content:center">保存</button>
+      </div>`);
+    $("plSave").addEventListener("click", async () => {
+      pl.name = ($("plName2").value || "").trim() || pl.name;
+      pl.updatedAt = Date.now();
+      await dbPut("playlists", pl);
+      closeSheet(); render(); toast("名前を変更しました");
+    });
+  });
+  $("plDelete").addEventListener("click", async () => {
+    await dbDel("playlists", id);
+    S.playlists = S.playlists.filter(p => p.id !== id);
+    if(S.activePlaylistId === id) S.activePlaylistId = null;
+    closeSheet(); render(); toast("削除しました");
+  });
+}
+
+/* ---------- 曲のメニュー ---------- */
+function openTrackMenu(id){
+  const t = trackById(id);
+  if(!t) return;
+  const inDetail = S.view === "playlists" && S.activePlaylistId;
+
+  openSheet(`
+    <h3>${esc(t.title)}</h3>
+    <p class="sub">${esc(t.artist)} ・ ${fmtBytes(t.fileSize)}</p>
+    <button class="sheet-item" id="mPlay">この曲を再生</button>
+    <button class="sheet-item" id="mAdd">プレイリストに追加</button>
+    ${inDetail ? '<button class="sheet-item" id="mRemove">このプレイリストから外す</button>' : ""}
+    <button class="sheet-item" id="mEdit">曲名・アーティストを編集</button>
+    <button class="sheet-item danger" id="mDel">ライブラリから削除</button>`);
+
+  $("mPlay").addEventListener("click", () => { closeSheet(); playQueue(visibleTracks().map(x => x.id), id); });
+
+  $("mAdd").addEventListener("click", () => {
+    if(!S.playlists.length){ closeSheet(); toast("先にプレイリストを作ってください"); return; }
+    openSheet(`<h3>追加先を選ぶ</h3><p class="sub">${esc(t.title)}</p>` +
+      S.playlists.map(p => `<button class="sheet-item" data-target="${p.id}">${esc(p.name)}</button>`).join(""));
+    document.querySelectorAll("[data-target]").forEach(b =>
+      b.addEventListener("click", async () => {
+        const pl = S.playlists.find(p => p.id === b.dataset.target);
+        if(pl.trackIds.includes(id)){ closeSheet(); toast("すでに追加されています"); return; }
+        pl.trackIds.push(id); pl.updatedAt = Date.now();
+        await dbPut("playlists", pl);
+        closeSheet(); render(); toast("「" + pl.name + "」に追加しました");
+      }));
+  });
+
+  if(inDetail){
+    $("mRemove").addEventListener("click", async () => {
+      const pl = S.playlists.find(p => p.id === S.activePlaylistId);
+      pl.trackIds = pl.trackIds.filter(x => x !== id);
+      await dbPut("playlists", pl);
+      closeSheet(); render(); toast("プレイリストから外しました");
+    });
+  }
+
+  $("mEdit").addEventListener("click", () => {
+    openSheet(`
+      <h3>曲の情報を編集</h3>
+      <div style="padding:0 12px">
+        <input class="field" id="eT" value="${esc(t.title)}" placeholder="曲名" maxlength="80">
+        <input class="field" id="eA" value="${esc(t.artist)}" placeholder="アーティスト" maxlength="80">
+        <button class="cta" id="eSave" style="width:100%;justify-content:center">保存</button>
+      </div>`);
+    $("eSave").addEventListener("click", async () => {
+      const rec = await dbGet("tracks", id);
+      if(rec){
+        rec.title  = ($("eT").value || "").trim() || rec.title;
+        rec.artist = ($("eA").value || "").trim() || rec.artist;
+        await dbPut("tracks", rec);
+        t.title = rec.title; t.artist = rec.artist;
+        if(S.currentId === id) updateNowPlaying(t);
+      }
+      closeSheet(); render(); toast("保存しました");
+    });
+  });
+
+  $("mDel").addEventListener("click", async () => {
+    if(S.currentId === id){ audio.pause(); audio.removeAttribute("src"); S.currentId = null; $("mini").classList.remove("show"); }
+    await dbDel("tracks", id);
+    S.tracks = S.tracks.filter(x => x.id !== id);
+    for(const p of S.playlists){
+      if(p.trackIds.includes(id)){
+        p.trackIds = p.trackIds.filter(x => x !== id);
+        await dbPut("playlists", p);
+      }
+    }
+    closeSheet(); render(); toast("削除しました");
+  });
+}
+
+/* ---------- 設定 ---------- */
+async function renderSettings(){
+  $("eyebrow").textContent = "Settings";
+  $("pageTitle").textContent = "設定";
+  const totalBytes = S.tracks.reduce((s, t) => s + (t.fileSize || 0), 0);
+
+  let quotaLine = "この端末では取得できません";
+  let pct = 0;
+  try{
+    if(navigator.storage && navigator.storage.estimate){
+      const e = await navigator.storage.estimate();
+      if(e.quota){
+        pct = Math.min(100, (e.usage / e.quota) * 100);
+        quotaLine = fmtBytes(e.usage) + " / " + fmtBytes(e.quota) + " 使用";
+      }
+    }
+  }catch(e){}
+
+  const standalone = window.navigator.standalone === true ||
+                     window.matchMedia("(display-mode: standalone)").matches;
+
+  $("main").innerHTML = `
+    <div class="card">
+      <h3>保存容量</h3>
+      <div class="gauge"><i style="width:${pct.toFixed(1)}%"></i></div>
+      <div class="stat"><span>曲数</span><b>${S.tracks.length}</b></div>
+      <div class="stat"><span>音楽データ</span><b>${fmtBytes(totalBytes)}</b></div>
+      <div class="stat"><span>ブラウザ割当</span><b>${quotaLine}</b></div>
+    </div>
+
+    <div class="card">
+      <h3>動作チェック</h3>
+      <div class="stat"><span>ホーム画面から起動</span><b style="color:${standalone ? "var(--green)" : "var(--danger)"}">${standalone ? "はい" : "いいえ"}</b></div>
+      <div class="stat"><span>オフライン対応</span><b style="color:${"serviceWorker" in navigator ? "var(--green)" : "var(--danger)"}">${"serviceWorker" in navigator ? "有効" : "非対応"}</b></div>
+      <div class="stat"><span>ロック画面操作</span><b style="color:${"mediaSession" in navigator ? "var(--green)" : "var(--danger)"}">${"mediaSession" in navigator ? "対応" : "非対応"}</b></div>
+      <p style="margin-top:12px">曲を再生したまま電源ボタンで画面を消し、音が鳴り続けるか確かめてください。止まる場合はロック画面での再生に制限があります。</p>
+    </div>
+
+    <button class="linkbtn" id="btnExport">プレイリスト構成を書き出す</button>
+    <button class="linkbtn" id="btnImportPl">プレイリスト構成を読み込む</button>
+    <button class="linkbtn danger" id="btnReset">すべてのデータを削除</button>
+
+    <div class="card" style="margin-top:14px">
+      <h3>Prism について</h3>
+      <p>個人利用のための音楽プレイヤーです。曲はこの端末の中だけに保存され、外部に送信されることはありません。</p>
+    </div>`;
+
+  $("btnExport").addEventListener("click", exportPlaylists);
+  $("btnImportPl").addEventListener("click", () => $("plImport").click());
+  $("btnReset").addEventListener("click", confirmReset);
+}
+
+function exportPlaylists(){
+  const data = {
+    version: 1, exportedAt: new Date().toISOString(),
+    tracks: S.tracks.map(t => ({ id: t.id, title: t.title, artist: t.artist, fileName: t.fileName, fileSize: t.fileSize })),
+    playlists: S.playlists
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "prism-backup.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast("書き出しました");
+}
+
+function confirmReset(){
+  openSheet(`
+    <h3>すべてのデータを削除</h3>
+    <p class="sub">曲・プレイリストがすべて消えます。取り消せません。</p>
+    <button class="sheet-item danger" id="okReset">削除する</button>
+    <button class="sheet-item" id="noReset">やめる</button>`);
+  $("noReset").addEventListener("click", closeSheet);
+  $("okReset").addEventListener("click", async () => {
+    audio.pause(); audio.removeAttribute("src");
+    await req(tx("tracks", "readwrite").clear());
+    await req(tx("playlists", "readwrite").clear());
+    await req(tx("settings", "readwrite").clear());
+    S.tracks = []; S.playlists = []; S.currentId = null; S.queue = []; S.order = [];
+    $("mini").classList.remove("show");
+    closeSheet(); render(); toast("削除しました");
+  });
+}
+
+/* ============================================================
+   10. シート / Now Playing
+   ============================================================ */
+function openSheet(html){
+  $("sheetBody").innerHTML = html;
+  $("sheet").classList.add("show");
+  $("scrim").classList.add("show");
+}
+function closeSheet(){
+  $("sheet").classList.remove("show");
+  $("scrim").classList.remove("show");
+}
+$("scrim").addEventListener("click", () => { closeSheet(); closeNP(); });
+
+function openNP(){ if(S.currentId) $("np").classList.add("show"); }
+function closeNP(){ $("np").classList.remove("show"); }
+$("npClose").addEventListener("click", closeNP);
+$("miniOpen").addEventListener("click", openNP);
+
+/* Now Playingを下スワイプで閉じる */
+let touchY0 = null;
+$("np").addEventListener("touchstart", e => { touchY0 = e.touches[0].clientY; }, {passive:true});
+$("np").addEventListener("touchend", e => {
+  if(touchY0 !== null && e.changedTouches[0].clientY - touchY0 > 90) closeNP();
+  touchY0 = null;
+}, {passive:true});
+
+/* ============================================================
+   11. 操作の紐付け
+   ============================================================ */
+$("btnPlay").addEventListener("click", togglePlay);
+$("miniPlay").addEventListener("click", togglePlay);
+$("btnNext").addEventListener("click", () => nextTrack(true));
+$("miniNext").addEventListener("click", () => nextTrack(true));
+$("btnPrev").addEventListener("click", prevTrack);
+
+$("btnShuffle").addEventListener("click", () => {
+  S.shuffle = !S.shuffle;
+  $("btnShuffle").setAttribute("aria-pressed", S.shuffle);
+  if(S.queue.length) buildOrder(S.currentId);
+  saveSettings();
+  toast(S.shuffle ? "シャッフル：オン" : "シャッフル：オフ");
+});
+
+$("btnRepeat").addEventListener("click", () => {
+  S.repeat = S.repeat === "off" ? "all" : S.repeat === "all" ? "one" : "off";
+  applyRepeatUI();
+  saveSettings();
+  toast({ off:"リピート：なし", all:"リピート：リスト全体", one:"リピート：1曲" }[S.repeat]);
+});
+function applyRepeatUI(){
+  $("btnRepeat").setAttribute("aria-pressed", S.repeat !== "off");
+  $("repBadge").classList.toggle("hidden", S.repeat !== "one");
+}
+
+document.querySelectorAll("#tabs button").forEach(b =>
+  b.addEventListener("click", () => {
+    if(S.view === b.dataset.view && b.dataset.view === "playlists") S.activePlaylistId = null;
+    S.view = b.dataset.view;
+    if(b.dataset.view !== "playlists") S.activePlaylistId = null;
+    render();
+  }));
+
+$("filePicker").addEventListener("change", e => { importFiles(e.target.files); e.target.value = ""; });
+
+/* プレイリスト構成の読み込み用 */
+const plImport = document.createElement("input");
+plImport.type = "file"; plImport.accept = "application/json,.json"; plImport.id = "plImport";
+plImport.className = "hidden";
+document.body.appendChild(plImport);
+plImport.addEventListener("change", async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if(!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    if(!Array.isArray(data.playlists)) throw 0;
+    // ファイル名を手がかりに、いまライブラリにある曲へ結び直す
+    const byFile = new Map(S.tracks.map(t => [t.fileName, t.id]));
+    const oldById = new Map((data.tracks || []).map(t => [t.id, t]));
+    let restored = 0;
+    for(const p of data.playlists){
+      const ids = (p.trackIds || []).map(oid => {
+        const old = oldById.get(oid);
+        return old ? byFile.get(old.fileName) : null;
+      }).filter(Boolean);
+      const np = { id: uid(), name: p.name, trackIds: ids, createdAt: Date.now(), updatedAt: Date.now() };
+      await dbPut("playlists", np);
+      S.playlists.push(np);
+      restored++;
+    }
+    render();
+    toast(restored + "件のプレイリストを復元しました");
+  }catch(err){
+    toast("読み込めませんでした");
+  }
+});
+
+/* ============================================================
+   11-b. iOSの音声ロック解除
+   iOSは「ユーザーが触った瞬間」以外の再生開始を拒否する。
+   曲の読み込みはファイル取り出しを挟むため、その瞬間から少しずれる。
+   そこで最初のタップで無音を一度鳴らし、以降の再生を許可させておく。
+   ============================================================ */
+const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+let audioUnlocked = false;
+function unlockAudio(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  if(audio.currentSrc || audio.src) return;   // すでに曲が入っていれば不要
+  try{
+    audio.src = SILENT;
+    const p = audio.play();
+    if(p && p.then) p.then(() => {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      setPlayingUI(false);
+    }).catch(() => {});
+  }catch(e){}
+}
+document.addEventListener("touchend", unlockAudio, {capture:true, once:true, passive:true});
+document.addEventListener("click",    unlockAudio, {capture:true, once:true});
+
+/* ============================================================
+   12. 起動
+   ============================================================ */
+(async function init(){
+  try{
+    db = await openDB();
+  }catch(e){
+    document.getElementById("main").innerHTML =
+      '<div class="empty"><h2>データベースを開けません</h2><p>Safariのプライベートブラウズを解除して開き直してください。</p></div>';
+    return;
+  }
+
+  // 保存領域を消されにくくする（対応ブラウザのみ）
+  try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
+
+  const [tracks, playlists, cfg] = await Promise.all([
+    dbAll("tracks"), dbAll("playlists"), dbGet("settings", "app")
+  ]);
+  S.tracks = tracks.map(({ blob, ...m }) => m);
+  S.playlists = playlists;
+
+  if(cfg){
+    S.repeat  = cfg.repeat  || "off";
+    S.shuffle = !!cfg.shuffle;
+    S.sort    = cfg.sort    || "addedAt";
+  }
+  $("btnShuffle").setAttribute("aria-pressed", S.shuffle);
+  applyRepeatUI();
+  render();
+
+  // 前回の続きを復元（自動再生はしない。iOSは操作なしの再生を認めないため）
+  if(cfg && cfg.lastTrackId && trackById(cfg.lastTrackId)){
+    S.queue = visibleTracks().map(t => t.id);
+    buildOrder(cfg.lastTrackId);
+    await loadCurrent(false, cfg.lastPos || 0);
+  }
+
+  if("serviceWorker" in navigator){
+    try{ await navigator.serviceWorker.register("sw.js"); }catch(e){}
+  }
+})();
+
+window.addEventListener("pagehide", () => saveSettings());
+document.addEventListener("visibilitychange", () => { if(document.hidden) saveSettings(); });
+</script>
+</body>
+</html>
